@@ -1,31 +1,37 @@
 const https = require('https');
+const http = require('http');
 
 const GAS_URL = 'https://script.google.com/macros/s/AKfycbzc9NHlulB6KpYEuE2FwFcwL9n_SR8h5DmAC_mPmJTqcacZjoCRXsKl09N26sba52fgqA/exec';
 
-function httpsGet(url) {
+function get(url, redirects = 0) {
   return new Promise((resolve, reject) => {
-    https.get(url, { headers: { 'Accept': 'application/json' } }, (res) => {
+    if (redirects > 10) return reject(new Error('Too many redirects'));
+    const lib = url.startsWith('https') ? https : http;
+    const req = lib.get(url, {
+      headers: {
+        'Accept': 'application/json, text/plain, */*',
+        'User-Agent': 'Mozilla/5.0'
+      }
+    }, (res) => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        return httpsGet(res.headers.location).then(resolve).catch(reject);
+        const next = res.headers.location.startsWith('http')
+          ? res.headers.location
+          : new URL(res.headers.location, url).href;
+        res.resume();
+        return get(next, redirects + 1).then(resolve).catch(reject);
       }
       let data = '';
       res.on('data', chunk => data += chunk);
       res.on('end', () => resolve({ status: res.statusCode, body: data }));
-    }).on('error', reject);
+    });
+    req.on('error', reject);
+    req.setTimeout(10000, () => { req.destroy(); reject(new Error('Timeout')); });
   });
 }
 
 exports.handler = async function(event, context) {
   try {
-    const result = await httpsGet(GAS_URL);
-
-    if (result.status !== 200) {
-      return {
-        statusCode: result.status,
-        body: JSON.stringify({ error: 'Errore dal server Google', status: result.status })
-      };
-    }
-
+    const result = await get(GAS_URL);
     return {
       statusCode: 200,
       headers: {
